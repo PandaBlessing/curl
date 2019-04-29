@@ -321,7 +321,6 @@ static CURLcode pre_transfer(struct GlobalConfig *global,
  * Call this after a transfer has completed.
  */
 static CURLcode post_transfer(struct GlobalConfig *global,
-                              struct OperationConfig *config,
                               CURLSH *share,
                               struct per_transfer *per,
                               CURLcode result,
@@ -329,6 +328,7 @@ static CURLcode post_transfer(struct GlobalConfig *global,
 {
   struct OutStruct *outs = &per->outs;
   CURL *curl = per->curl;
+  struct OperationConfig *config = per->config;
 
   *retryp = FALSE;
 
@@ -806,6 +806,7 @@ static CURLcode create_transfers(struct GlobalConfig *global,
           result = CURLE_OUT_OF_MEMORY;
           goto show_error;
         }
+        per->config = config;
         per->curl = curl;
         per->uploadfile = uploadfile;
 
@@ -1936,13 +1937,12 @@ static void wait_ms(int ms)
 static long all_added; /* number of easy handles currently added */
 
 static int add_parallel_transfers(struct GlobalConfig *global,
-                                  struct OperationConfig *config,
                                   CURLM *multi)
 {
   struct per_transfer *per;
   CURLcode result;
   CURLMcode mcode;
-  for(per = transfers; per && (all_added < config->parallel_max);
+  for(per = transfers; per && (all_added < global->parallel_max);
       per = per->next) {
     if(per->added)
       /* already added */
@@ -1966,7 +1966,6 @@ static int add_parallel_transfers(struct GlobalConfig *global,
 }
 
 static CURLcode parallel_transfers(struct GlobalConfig *global,
-                                   struct OperationConfig *config,
                                    CURLSH *share)
 {
   CURLM *multi;
@@ -1980,7 +1979,7 @@ static CURLcode parallel_transfers(struct GlobalConfig *global,
   if(!multi)
     return CURLE_OUT_OF_MEMORY;
 
-  result = add_parallel_transfers(global, config, multi);
+  result = add_parallel_transfers(global, multi);
   if(result)
     return result;
 
@@ -2023,7 +2022,7 @@ static CURLcode parallel_transfers(struct GlobalConfig *global,
           curl_easy_getinfo(easy, CURLINFO_PRIVATE, (void *)&ended);
           curl_multi_remove_handle(multi, easy);
 
-          result = post_transfer(global, config, share, ended, result, &retry);
+          result = post_transfer(global, share, ended, result, &retry);
           if(retry)
             continue;
           progress_finalize(ended); /* before it goes away */
@@ -2034,7 +2033,7 @@ static CURLcode parallel_transfers(struct GlobalConfig *global,
       } while(msg);
       if(removed)
         /* one or more transfers completed, add more! */
-        (void)add_parallel_transfers(global, config, multi);
+        (void)add_parallel_transfers(global, multi);
     }
   }
 
@@ -2054,7 +2053,6 @@ static CURLcode parallel_transfers(struct GlobalConfig *global,
 }
 
 static CURLcode serial_transfers(struct GlobalConfig *global,
-                                 struct OperationConfig *config,
                                  CURLSH *share)
 {
   CURLcode returncode = CURLE_OK;
@@ -2062,6 +2060,7 @@ static CURLcode serial_transfers(struct GlobalConfig *global,
   struct per_transfer *per;
   for(per = transfers; per;) {
     bool retry;
+    struct OperationConfig *config = per->config;
     result = pre_transfer(global, per);
     if(result)
       break;
@@ -2083,7 +2082,7 @@ static CURLcode serial_transfers(struct GlobalConfig *global,
     /* store the result of the actual transfer */
     returncode = result;
 
-    result = post_transfer(global, config, share, per, result, &retry);
+    result = post_transfer(global, share, per, result, &retry);
     if(retry)
       continue;
     per = del_transfer(per);
@@ -2106,11 +2105,7 @@ static CURLcode operate_do(struct GlobalConfig *global,
   CURLcode result = CURLE_OK;
   bool capath_from_env;
 
-  /* Save the values of noprogress and isatty to restore them later on */
-  bool orig_noprogress = global->noprogress;
-  bool orig_isatty = global->isatty;
   CURL *curltls = curl_easy_init();
-  struct per_transfer *per;
 
   /*
   ** Beyond this point no return'ing from this function allowed.
@@ -2200,24 +2195,42 @@ static CURLcode operate_do(struct GlobalConfig *global,
       }
 #endif
     }
+    curl_easy_cleanup(curltls);
   }
 
   if(!result)
     /* loop through the list of given URLs */
     result = create_transfers(global, config, share, capath_from_env);
 
+  return result;
+}
+
+static CURLcode operate_transfers(struct GlobalConfig *global,
+                                  CURLSH *share,
+                                  CURLcode result)
+{
+  /* Save the values of noprogress and isatty to restore them later on */
+  bool orig_noprogress = global->noprogress;
+  bool orig_isatty = global->isatty;
+  struct per_transfer *per;
+
   /* Time to actually do the transfers */
   if(!result) {
-    if(config->parallel)
-      result = parallel_transfers(global, config, share);
+    if(global->parallel)
+      result = parallel_transfers(global, share);
     else
-      result = serial_transfers(global, config, share);
+      result = serial_transfers(global, share);
   }
 
   /* cleanup if there are any left */
   for(per = transfers; per;) {
     bool retry;
-    (void)post_transfer(global, config, share, per, result, &retry);
+    (void)post_transfer(global, share, per, result, &retry);
+    /* Free list of given URLs */
+    clean_getout(per->config);
+
+    /* Release metalink related resources here */
+    clean_metalink(per->config);
     per = del_transfer(per);
   }
 
@@ -2225,13 +2238,6 @@ static CURLcode operate_do(struct GlobalConfig *global,
   global->noprogress = orig_noprogress;
   global->isatty = orig_isatty;
 
-  /* Free list of given URLs */
-  clean_getout(config);
-
-  /* Release metalink related resources here */
-  clean_metalink(config);
-
-  curl_easy_cleanup(curltls);
 
   return result;
 }
@@ -2316,11 +2322,14 @@ CURLcode operate(struct GlobalConfig *config, int argc, argv_item_t argv[])
         /* Set the current operation pointer */
         config->current = config->first;
 
-        /* Perform each operation */
+        /* Setup all transfers */
         while(!result && config->current) {
           result = operate_do(config, config->current, share);
           config->current = config->current->next;
         }
+
+        /* now run! */
+        result = operate_transfers(config, share, result);
 
         curl_share_cleanup(share);
 #ifndef CURL_DISABLE_LIBCURL_OPTION

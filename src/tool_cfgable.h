@@ -261,8 +261,6 @@ struct OperationConfig {
                                      0 is valid. default: CURL_HET_DEFAULT. */
   bool haproxy_protocol;          /* whether to send HAProxy protocol v1 */
   bool disallow_username_in_url;  /* disallow usernames in URLs */
-  bool parallel;
-  long parallel_max;
   struct GlobalConfig *global;
   struct OperationConfig *prev;
   struct OperationConfig *next;   /* Always last in the struct */
@@ -286,6 +284,8 @@ struct GlobalConfig {
   char *libcurl;                  /* Output libcurl code to this file name */
   bool fail_early;                /* exit on first transfer error */
   bool styled_output;             /* enable fancy output style detection */
+  bool parallel;
+  long parallel_max;
   struct OperationConfig *first;
   struct OperationConfig *current;
   struct OperationConfig *last;   /* Always last in the struct */

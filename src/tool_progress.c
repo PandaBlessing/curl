@@ -158,8 +158,14 @@ bool progress_meter(struct GlobalConfig *global,
 {
   static struct timeval stamp;
   static bool header = FALSE;
-  struct timeval now = tvnow();
-  long diff = tvdiff(now, stamp);
+  struct timeval now;
+  long diff;
+
+  if(global->noprogress)
+    return FALSE;
+
+  now = tvnow();
+  diff = tvdiff(now, stamp);
 
   if(!header) {
     header = TRUE;

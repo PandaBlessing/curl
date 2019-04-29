@@ -2128,15 +2128,15 @@ ParameterError getparameter(const char *flag, /* f or -long-flag */
     case 'Z':
       switch(subletter) {
       case '\0':  /* --parallel */
-        config->parallel = toggle;
+        global->parallel = toggle;
         break;
       case 'b':   /* --parallel-max */
-        err = str2unum(&config->parallel_max, nextarg);
+        err = str2unum(&global->parallel_max, nextarg);
         if(err)
           return err;
-        if((config->parallel_max > MAX_PARALLEL) ||
-           (config->parallel_max < 1))
-          config->parallel_max = PARALLEL_DEFAULT;
+        if((global->parallel_max > MAX_PARALLEL) ||
+           (global->parallel_max < 1))
+          global->parallel_max = PARALLEL_DEFAULT;
         break;
       }
       break;
@@ -2189,14 +2189,14 @@ ParameterError getparameter(const char *flag, /* f or -long-flag */
   return PARAM_OK;
 }
 
-ParameterError parse_args(struct GlobalConfig *config, int argc,
+ParameterError parse_args(struct GlobalConfig *global, int argc,
                           argv_item_t argv[])
 {
   int i;
   bool stillflags;
   char *orig_opt = NULL;
   ParameterError result = PARAM_OK;
-  struct OperationConfig *operation = config->first;
+  struct OperationConfig *config = global->first;
 
   for(i = 1, stillflags = TRUE; i < argc && !result; i++) {
     orig_opt = argv[i];
@@ -2212,28 +2212,28 @@ ParameterError parse_args(struct GlobalConfig *config, int argc,
       else {
         char *nextarg = (i < (argc - 1)) ? argv[i + 1] : NULL;
 
-        result = getparameter(flag, nextarg, &passarg, config, operation);
+        result = getparameter(flag, nextarg, &passarg, global, config);
         if(result == PARAM_NEXT_OPERATION) {
           /* Reset result as PARAM_NEXT_OPERATION is only used here and not
              returned from this function */
           result = PARAM_OK;
 
-          if(operation->url_list && operation->url_list->url) {
+          if(config->url_list && config->url_list->url) {
             /* Allocate the next config */
-            operation->next = malloc(sizeof(struct OperationConfig));
-            if(operation->next) {
+            config->next = malloc(sizeof(struct OperationConfig));
+            if(config->next) {
               /* Initialise the newly created config */
-              config_init(operation->next);
+              config_init(config->next);
 
               /* Set the global config pointer */
-              operation->next->global = config;
+              config->next->global = global;
 
-              /* Update the last operation pointer */
-              config->last = operation->next;
+              /* Update the last config pointer */
+              global->last = config->next;
 
               /* Move onto the new config */
-              operation->next->prev = operation;
-              operation = operation->next;
+              config->next->prev = config;
+              config = config->next;
             }
             else
               result = PARAM_NO_MEM;
@@ -2247,8 +2247,8 @@ ParameterError parse_args(struct GlobalConfig *config, int argc,
       bool used;
 
       /* Just add the URL please */
-      result = getparameter((char *)"--url", argv[i], &used, config,
-                            operation);
+      result = getparameter((char *)"--url", argv[i], &used, global,
+                            config);
     }
   }
 
@@ -2259,9 +2259,9 @@ ParameterError parse_args(struct GlobalConfig *config, int argc,
     const char *reason = param2text(result);
 
     if(orig_opt && strcmp(":", orig_opt))
-      helpf(config->errors, "option %s: %s\n", orig_opt, reason);
+      helpf(global->errors, "option %s: %s\n", orig_opt, reason);
     else
-      helpf(config->errors, "%s\n", reason);
+      helpf(global->errors, "%s\n", reason);
   }
 
   return result;
